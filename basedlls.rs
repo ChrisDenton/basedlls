@@ -11,18 +11,27 @@ use winapi::{
     PEB,
 };
 
-use core::ffi::CStr;
 use core::{arch, mem};
-
-const fn cstr(s: &str) -> &CStr {
-    match CStr::from_bytes_with_nul(s.as_bytes()) {
-        Ok(cstr) => cstr,
-        Err(_) => panic!("invalid CStr"),
-    }
-}
 
 // Not exactly accurate but I'm lazy.
 type WriteFileFn = extern "system" fn(isize, *const u8, u32, *mut u32, isize) -> i32;
+
+/// # Safety
+///
+/// Both `a` and `b` must be null terminated.
+unsafe fn eq_cstr(a: *const u8, b: *const u8) -> bool {
+    unsafe {
+        let mut i = 0;
+        loop {
+            if *a.add(i) != *b.add(i) {
+                return false;
+            } else if *a.add(i) == 0 {
+                return true;
+            }
+            i += 1;
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 extern "C" fn main() -> u32 {
@@ -50,15 +59,21 @@ extern "C" fn main() -> u32 {
             }
             if let Some(WriteFile) = write_file {
                 let mut written = 0;
-                WriteFile(
+                let r = WriteFile(
                     -11,
                     full_name.Buffer.cast::<u8>(),
                     full_name.Length as u32,
                     &mut written,
                     0,
                 );
+                if r == 0 {
+                    return core::line!();
+                }
                 let nl = (b'\n' as u16).to_ne_bytes();
-                WriteFile(-11, nl.as_ptr(), nl.len() as u32, &mut written, 0);
+                let r = WriteFile(-11, nl.as_ptr(), nl.len() as u32, &mut written, 0);
+                if r == 0 {
+                    return core::line!();
+                }
             } else {
                 // Find WriteFile so we can write output.
                 // Once found, we iterate modules again from the start.
@@ -94,13 +109,14 @@ extern "C" fn main() -> u32 {
                     for i in 0..(*export_table).NumberOfNames as usize {
                         // See https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#export-ordinal-table
                         let name = dll_base.add(names[i] as usize);
-                        let name = CStr::from_ptr(name.cast());
-                        if name == const { cstr("WriteFile\0") } {
+                        if eq_cstr(b"WriteFile\0".as_ptr(), name) {
                             let ordinal = name_ordinals[i];
-                            let function = functions[ordinal as usize];
+                            let Some(&function) = functions.get(ordinal as usize) else {
+                                return core::line!();
+                            };
 
                             if function >= data.VirtualAddress
-                                && function <= data.VirtualAddress + data.Size
+                                && function < data.VirtualAddress + data.Size
                             {
                                 // Note: I didn't bother handling forwarders
                                 continue;
