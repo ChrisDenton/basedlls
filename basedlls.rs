@@ -42,7 +42,7 @@ extern "C" fn main() -> u32 {
         'modules: while !cursor.is_null() {
             // We're iterating in memory order, so adjust to that header.
             let offset = mem::offset_of!(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
-            let entry = cursor.byte_sub(offset) as *mut LDR_DATA_TABLE_ENTRY;
+            let entry = cursor.byte_sub(offset).cast::<LDR_DATA_TABLE_ENTRY>();
             let dll_base = (*entry).DllBase.cast::<u8>();
             let full_name = &(*entry).FullDllName;
             if dll_base.is_null() {
@@ -50,7 +50,7 @@ extern "C" fn main() -> u32 {
             }
             if let Some(WriteFile) = write_file {
                 let mut written = 0;
-                (WriteFile)(
+                WriteFile(
                     -11,
                     full_name.Buffer.cast::<u8>(),
                     full_name.Length as u32,
@@ -58,7 +58,7 @@ extern "C" fn main() -> u32 {
                     0,
                 );
                 let nl = (b'\n' as u16).to_ne_bytes();
-                (WriteFile)(-11, nl.as_ptr(), nl.len() as u32, &mut written, 0);
+                WriteFile(-11, nl.as_ptr(), nl.len() as u32, &mut written, 0);
             } else {
                 // Find WriteFile so we can write output.
                 // Once found, we iterate modules again from the start.
@@ -74,15 +74,21 @@ extern "C" fn main() -> u32 {
                         .cast::<IMAGE_EXPORT_DIRECTORY>();
 
                     let names = core::slice::from_raw_parts(
-                        dll_base.add(export_table.AddressOfNames as usize) as *const u32,
+                        dll_base
+                            .add(export_table.AddressOfNames as usize)
+                            .cast::<u32>(),
                         export_table.NumberOfNames as usize,
                     );
                     let name_ordinals = core::slice::from_raw_parts(
-                        dll_base.add(export_table.AddressOfNameOrdinals as usize) as *const u16,
+                        dll_base
+                            .add(export_table.AddressOfNameOrdinals as usize)
+                            .cast::<u16>(),
                         export_table.NumberOfNames as usize,
                     );
                     let functions = core::slice::from_raw_parts(
-                        dll_base.add(export_table.AddressOfFunctions as usize) as *const u32,
+                        dll_base
+                            .add(export_table.AddressOfFunctions as usize)
+                            .cast::<u32>(),
                         export_table.NumberOfFunctions as usize,
                     );
                     for i in 0..(*export_table).NumberOfNames as usize {
